@@ -1,0 +1,16 @@
+# 虚拟环境
+.venv/
+env/
+venv/
+__pycache__/
+*.pyc
+
+# 运行数据与日志
+logs/
+data/
+*.log
+*.tmp
+
+# 本地个人配置与Token
+config/local_secrets.json
+.env

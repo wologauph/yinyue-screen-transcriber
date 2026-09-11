@@ -88,7 +88,21 @@ def format_sec(sec):
 def set_clipboard(text: str) -> bool:
     if not text:
         return False
-    for attempt in range(5):
+    # 首选用 Windows 官方原生的 PowerShell Set-Clipboard（最稳固、能跨进程与锁常驻）
+    try:
+        proc = subprocess.Popen(
+            ["powershell", "-NoProfile", "-Command", "$input | Set-Clipboard"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        proc.communicate(input=text.encode("utf-8"))
+        if proc.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    for attempt in range(3):
         try:
             import win32clipboard
             import win32con
@@ -99,19 +113,7 @@ def set_clipboard(text: str) -> bool:
             return True
         except Exception:
             time.sleep(0.05)
-    # 备用方案：通过 powershell 或 tkinter
-    try:
-        import tkinter as tk
-        r = tk.Tk()
-        r.withdraw()
-        r.clipboard_clear()
-        r.clipboard_append(text)
-        r.update()
-        r.destroy()
-        return True
-    except Exception as e:
-        log(f"[ERROR] 写入剪贴板失败: {e}", "ERROR")
-        return False
+    return False
 
 # -----------------------------------------------------------------------------
 # 现代化轻量非阻塞 Toast 提示视窗

@@ -200,6 +200,42 @@ def show_toast_popup(title: str, msg: str, md_path: str, duration_sec: float = 8
         log(f"[WARNING] 弹窗提示渲染异常: {e}", "WARNING")
 
 # -----------------------------------------------------------------------------
+# 智能书名与场景感知路由
+# -----------------------------------------------------------------------------
+def detect_current_book():
+    readest_books_dir = os.path.expandvars(r"%APPDATA%\com.bilingify.readest\Readest\Books")
+    if not os.path.exists(readest_books_dir):
+        return None
+    try:
+        configs = []
+        for root, dirs, files in os.walk(readest_books_dir):
+            if "config.json" in files:
+                full = os.path.join(root, "config.json")
+                configs.append((os.path.getmtime(full), full))
+        if not configs:
+            return None
+        configs.sort(key=lambda x: x[0], reverse=True)
+        latest_config = configs[0][1]
+        book_hash = os.path.basename(os.path.dirname(latest_config))
+        
+        lib_file = os.path.join(readest_books_dir, "library.json")
+        if os.path.exists(lib_file):
+            with open(lib_file, "r", encoding="utf-8") as f:
+                lib = json.load(f)
+            for b in lib:
+                if b.get("hash") == book_hash:
+                    title = b.get("title", "")
+                    for k in ["白夜行", "绿山墙的安妮", "被讨厌的勇气", "解忧杂货店", "恶意", "秘密", "不良之年少轻狂", "不良之谁与争锋", "金瓶梅"]:
+                        if k in title:
+                            return k
+                    import re
+                    clean = re.sub(r"[（\(【].*?[）\)】]|[：:•·\s]+", " ", title).strip().split()[0]
+                    return clean or title
+    except Exception as e:
+        log(f"[WARNING] 智能感知当前在本书目异常: {e}", "WARNING")
+    return None
+
+# -----------------------------------------------------------------------------
 # 核心业务管线
 # -----------------------------------------------------------------------------
 async def process_video(video_path: str = None):
@@ -213,36 +249,58 @@ async def process_video(video_path: str = None):
     log("[INFO] ========================================================")
 
     config = load_config()
-    desktop_dir = config["desktop_dir"]
-    closure_dir = config["closure_base_dir"]
-    vault_dir = config["vault_base_dir"]
+    desktop_dir = config.get("desktop_dir", r"C:\Users\1\Desktop")
+    recordings_dir = r"D:\桌面录屏"
 
-    os.makedirs(closure_dir, exist_ok=True)
-    os.makedirs(vault_dir, exist_ok=True)
-
-    # 1. 查找目标视频
+    # 1. 查找目标视频 (同时扫描桌面与 D:\桌面录屏 根目录最新视频)
     if not video_path:
         videos = []
-        if os.path.exists(desktop_dir):
-            for f in os.listdir(desktop_dir):
-                if f.lower().endswith((".mp4", ".mkv", ".mov", ".avi", ".ts")):
-                    full = os.path.join(desktop_dir, f)
+        scan_dirs = [desktop_dir]
+        if os.path.exists(recordings_dir):
+            scan_dirs.append(recordings_dir)
+        
+        for sdir in scan_dirs:
+            if not os.path.exists(sdir):
+                continue
+            for f in os.listdir(sdir):
+                full = os.path.join(sdir, f)
+                # 仅查找顶级文件，排除子文件夹内的历史视频
+                if os.path.isfile(full) and f.lower().endswith((".mp4", ".mkv", ".mov", ".avi", ".ts")):
                     videos.append((os.path.getmtime(full), full))
+
         if not videos:
-            log("[WARNING] 桌面未发现待处理的屏幕录制文件！", "WARNING")
-            show_toast_popup("未发现录屏", "桌面上未检测到任何视频文件，请先完成录屏。", "", 5.0)
+            log("[WARNING] 桌面及录屏总库未发现待处理的屏幕录制文件！", "WARNING")
+            show_toast_popup("未发现录屏", "未检测到任何待处理录屏视频，请先完成录屏。", "", 5.0)
             return
         videos.sort(key=lambda x: x[0], reverse=True)
         video_path = videos[0][1]
 
     video_name = os.path.basename(video_path)
     video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    log(f"[INFO] 锁定待处理目标录屏: {video_name} (体积: {video_size_mb:.2f} MB)")
+    log(f"[INFO] 锁定待处理目标录屏: {video_name} ({video_path}) (体积: {video_size_mb:.2f} MB)")
 
-    # 提取时间戳标识 (如 2026-09-11_170507)
+    # 2. 智能感知当前阅读书目，动态确立归档大本营
+    detected_book = detect_current_book()
+    if detected_book:
+        log(f"[INFO] 🎯 智能感知到主人当前正在精读: 《{detected_book}》")
+        book_title = detected_book
+        closure_dir = os.path.join(recordings_dir, f"【{book_title}】一镜到底录读闭环")
+        vault_dir = os.path.join(r"D:\银月baby的工作玉简\05_全自动项目与工作流\全自动高维阅读与智囊流水线\03_高维阅读产出区", book_title)
+    else:
+        book_title = "录读原稿"
+        closure_dir = config.get("closure_base_dir", os.path.join(recordings_dir, "【通用录屏】一镜到底录读闭环"))
+        vault_dir = config.get("vault_base_dir", os.path.join(r"D:\银月baby的工作玉简\05_全自动项目与工作流\全自动高维阅读与智囊流水线\03_高维阅读产出区", "通用录屏"))
+
+    os.makedirs(closure_dir, exist_ok=True)
+    os.makedirs(vault_dir, exist_ok=True)
+    log(f"[INFO] 归档大本营锁定: {closure_dir}")
+    log(f"[INFO] 玉简产出区锁定: {vault_dir}")
+
+    # 提取时间戳标识 (如 2026-09-16_105548)
     time_tag = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    # 尝试从文件名解析 (屏幕录制 2026-09-11 170507.mp4)
-    parts = video_name.replace("屏幕录制", "").replace(".mp4", "").strip().split()
+    # 尝试从文件名解析 (屏幕录制 2026-09-11 170507.mp4 或 2026-09-16 10-55-48.mp4)
+    clean_name = video_name.replace("屏幕录制", "").replace(".mp4", "").replace(".mkv", "").strip()
+    parts = clean_name.replace("-", " ").split()
     if len(parts) >= 2:
         time_tag = f"{parts[0]}_{parts[1]}"
 
@@ -253,7 +311,7 @@ async def process_video(video_path: str = None):
     temp_chunk_dir = os.path.join(closure_dir, f"_tmp_{time_tag}")
     os.makedirs(temp_chunk_dir, exist_ok=True)
 
-    # 2. FFmpeg 抽离纯音频
+    # 3. FFmpeg 抽离纯音频
     log(f"[INFO] 正在抽取 16kHz 单声道无损音频母带 -> {os.path.basename(audio_file)}")
     t_extract_start = time.time()
     cmd = f'ffmpeg -y -i "{video_path}" -vn -ar 16000 -ac 1 -c:a pcm_s16le "{audio_file}"'
@@ -357,7 +415,7 @@ async def process_video(video_path: str = None):
     full_polished = "\n\n".join([r["llm_text"] for r in results if r["is_speech"]])
     total_char_count = len(full_polished)
 
-    md_content = f"""# 《被讨厌的勇气》现场一镜到底录读逐字原稿
+    md_content = f"""# 《{book_title}》现场一镜到底录读逐字原稿
 
 > **录制时间**：{time_tag}
 > **总时长**：{format_sec(total_sec)}（{total_sec:.1f} 秒）
@@ -407,13 +465,14 @@ async def process_video(video_path: str = None):
         f.write(md_content)
     log(f"[SUCCESS] 玉简同步镜像卡已更新: {vault_md}")
 
-    # 6. 移动桌面大视频归位
+    # 6. 移动录屏原件归位大本营
     if config.get("clean_desktop_video", True) and os.path.exists(video_path):
-        try:
-            shutil.move(video_path, target_video)
-            log(f"[CLEAN] 桌面录屏原件已自动移入大本营: {target_video}，桌面彻底恢复洁癖！")
-        except Exception as e:
-            log(f"[WARNING] 移动桌面视频异常: {e}", "WARNING")
+        if os.path.abspath(video_path) != os.path.abspath(target_video):
+            try:
+                shutil.move(video_path, target_video)
+                log(f"[CLEAN] 录屏原件已自动归位至大本营: {target_video}，原目录彻底恢复洁癖！")
+            except Exception as e:
+                log(f"[WARNING] 移动录屏视频异常: {e}", "WARNING")
 
     # 7. 写入剪贴板
     if config.get("auto_clipboard", True):

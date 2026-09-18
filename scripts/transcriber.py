@@ -203,36 +203,61 @@ def show_toast_popup(title: str, msg: str, md_path: str, duration_sec: float = 8
 # 智能书名与场景感知路由
 # -----------------------------------------------------------------------------
 def detect_current_book():
+    # 1. 优先从 NeatReader 嗅探当前精读书目
+    neat_dir = os.path.expandvars(r"%APPDATA%\NeatReader\bookData")
+    if os.path.exists(neat_dir):
+        try:
+            folders = []
+            for d in os.listdir(neat_dir):
+                fp = os.path.join(neat_dir, d)
+                if os.path.isdir(fp):
+                    folders.append((os.path.getmtime(fp), fp))
+            if folders:
+                folders.sort(key=lambda x: x[0], reverse=True)
+                for _, folder in folders[:3]:
+                    files = os.listdir(folder)
+                    book_files = [x for x in files if not x.startswith("cover") and not x.startswith("pagination")]
+                    if book_files:
+                        raw_name = book_files[0]
+                        for k in ["白夜行", "绿山墙的安妮", "被讨厌的勇气", "解忧杂货店", "恶意", "秘密", "不良之年少轻狂", "不良之谁与争锋", "金瓶梅", "嫌疑人X的献身"]:
+                            if k in raw_name:
+                                return k
+                        import re
+                        clean = re.sub(r"[（\(【].*?[）\)】]|[：:•·\s]+", " ", raw_name).strip().split()[0]
+                        if clean:
+                            return clean
+        except Exception as e:
+            log(f"[WARNING] 嗅探 NeatReader 书目异常: {e}", "WARNING")
+
+    # 2. 备选方案：从 Readest 嗅探
     readest_books_dir = os.path.expandvars(r"%APPDATA%\com.bilingify.readest\Readest\Books")
-    if not os.path.exists(readest_books_dir):
-        return None
-    try:
-        configs = []
-        for root, dirs, files in os.walk(readest_books_dir):
-            if "config.json" in files:
-                full = os.path.join(root, "config.json")
-                configs.append((os.path.getmtime(full), full))
-        if not configs:
-            return None
-        configs.sort(key=lambda x: x[0], reverse=True)
-        latest_config = configs[0][1]
-        book_hash = os.path.basename(os.path.dirname(latest_config))
-        
-        lib_file = os.path.join(readest_books_dir, "library.json")
-        if os.path.exists(lib_file):
-            with open(lib_file, "r", encoding="utf-8") as f:
-                lib = json.load(f)
-            for b in lib:
-                if b.get("hash") == book_hash:
-                    title = b.get("title", "")
-                    for k in ["白夜行", "绿山墙的安妮", "被讨厌的勇气", "解忧杂货店", "恶意", "秘密", "不良之年少轻狂", "不良之谁与争锋", "金瓶梅"]:
-                        if k in title:
-                            return k
-                    import re
-                    clean = re.sub(r"[（\(【].*?[）\)】]|[：:•·\s]+", " ", title).strip().split()[0]
-                    return clean or title
-    except Exception as e:
-        log(f"[WARNING] 智能感知当前在本书目异常: {e}", "WARNING")
+    if os.path.exists(readest_books_dir):
+        try:
+            configs = []
+            for root, dirs, files in os.walk(readest_books_dir):
+                if "config.json" in files:
+                    full = os.path.join(root, "config.json")
+                    configs.append((os.path.getmtime(full), full))
+            if configs:
+                configs.sort(key=lambda x: x[0], reverse=True)
+                latest_config = configs[0][1]
+                book_hash = os.path.basename(os.path.dirname(latest_config))
+                
+                lib_file = os.path.join(readest_books_dir, "library.json")
+                if os.path.exists(lib_file):
+                    with open(lib_file, "r", encoding="utf-8") as f:
+                        lib = json.load(f)
+                    for b in lib:
+                        if b.get("hash") == book_hash:
+                            title = b.get("title", "")
+                            for k in ["白夜行", "绿山墙的安妮", "被讨厌的勇气", "解忧杂货店", "恶意", "秘密", "不良之年少轻狂", "不良之谁与争锋", "金瓶梅", "嫌疑人X的献身"]:
+                                if k in title:
+                                    return k
+                            import re
+                            clean = re.sub(r"[（\(【].*?[）\)】]|[：:•·\s]+", " ", title).strip().split()[0]
+                            return clean or title
+        except Exception as e:
+            log(f"[WARNING] 嗅探 Readest 书目异常: {e}", "WARNING")
     return None
 
 # -----------------------------------------------------------------------------
@@ -296,13 +321,17 @@ async def process_video(video_path: str = None):
     log(f"[INFO] 归档大本营锁定: {closure_dir}")
     log(f"[INFO] 玉简产出区锁定: {vault_dir}")
 
-    # 提取时间戳标识 (如 2026-09-16_105548)
-    time_tag = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    # 尝试从文件名解析 (屏幕录制 2026-09-11 170507.mp4 或 2026-09-16 10-55-48.mp4)
-    clean_name = video_name.replace("屏幕录制", "").replace(".mp4", "").replace(".mkv", "").strip()
-    parts = clean_name.replace("-", " ").split()
-    if len(parts) >= 2:
-        time_tag = f"{parts[0]}_{parts[1]}"
+    # 提取时间戳标识 (如 2026-09-19_035328)
+    import re
+    m_obs = re.search(r"(\d{4}-\d{2}-\d{2})[ _-](\d{2})[-:](\d{2})[-:](\d{2})", video_name)
+    if m_obs:
+        time_tag = f"{m_obs.group(1)}_{m_obs.group(2)}{m_obs.group(3)}{m_obs.group(4)}"
+    else:
+        m_win = re.search(r"(\d{4}-\d{2}-\d{2})[ _-](\d{6})", video_name)
+        if m_win:
+            time_tag = f"{m_win.group(1)}_{m_win.group(2)}"
+        else:
+            time_tag = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
     audio_file = os.path.join(closure_dir, f"audio_{time_tag}.wav")
     target_video = os.path.join(closure_dir, video_name)

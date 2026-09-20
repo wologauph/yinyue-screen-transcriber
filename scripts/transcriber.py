@@ -263,7 +263,7 @@ def detect_current_book():
 # -----------------------------------------------------------------------------
 # 核心业务管线
 # -----------------------------------------------------------------------------
-async def process_video(video_path: str = None):
+async def process_video(video_path: str = None, book_override: str = None):
     t_zero = time.time()
     # 覆盖最新流水账日志
     with open(LATEST_LOG, "w", encoding="utf-8") as f:
@@ -305,16 +305,22 @@ async def process_video(video_path: str = None):
     log(f"[INFO] 锁定待处理目标录屏: {video_name} ({video_path}) (体积: {video_size_mb:.2f} MB)")
 
     # 2. 智能感知当前阅读书目，动态确立归档大本营
-    detected_book = detect_current_book()
-    if detected_book:
-        log(f"[INFO] 🎯 智能感知到主人当前正在精读: 《{detected_book}》")
-        book_title = detected_book
+    if book_override:
+        book_title = book_override
+        log(f"[INFO] 🎯 使用指定书目归档: 《{book_title}》")
         closure_dir = os.path.join(recordings_dir, f"【{book_title}】一镜到底录读闭环")
         vault_dir = os.path.join(r"D:\银月baby的工作玉简\05_全自动项目与工作流\全自动高维阅读与智囊流水线\03_高维阅读产出区", book_title)
     else:
-        book_title = "录读原稿"
-        closure_dir = config.get("closure_base_dir", os.path.join(recordings_dir, "【通用录屏】一镜到底录读闭环"))
-        vault_dir = config.get("vault_base_dir", os.path.join(r"D:\银月baby的工作玉简\05_全自动项目与工作流\全自动高维阅读与智囊流水线\03_高维阅读产出区", "通用录屏"))
+        detected_book = detect_current_book()
+        if detected_book:
+            log(f"[INFO] 🎯 智能感知到主人当前正在精读: 《{detected_book}》")
+            book_title = detected_book
+            closure_dir = os.path.join(recordings_dir, f"【{book_title}】一镜到底录读闭环")
+            vault_dir = os.path.join(r"D:\银月baby的工作玉简\05_全自动项目与工作流\全自动高维阅读与智囊流水线\03_高维阅读产出区", book_title)
+        else:
+            book_title = "录读原稿"
+            closure_dir = config.get("closure_base_dir", os.path.join(recordings_dir, "【通用录屏】一镜到底录读闭环"))
+            vault_dir = config.get("vault_base_dir", os.path.join(r"D:\银月baby的工作玉简\05_全自动项目与工作流\全自动高维阅读与智囊流水线\03_高维阅读产出区", "通用录屏"))
 
     os.makedirs(closure_dir, exist_ok=True)
     os.makedirs(vault_dir, exist_ok=True)
@@ -349,6 +355,12 @@ async def process_video(video_path: str = None):
         log("[ERROR] FFmpeg 音频分离失败！", "ERROR")
         return
     log(f"[SUCCESS] 音频母带分离完成，耗时: {time.time() - t_extract_start:.2f} 秒")
+
+    # 同步压制广播级饱满人声 MP3
+    enhanced_mp3 = os.path.join(closure_dir, f"{book_title}_5小时大结局录读_人声饱满增强版.mp3")
+    log(f"[INFO] 正在同步压制广播级饱满人声 MP3 -> {os.path.basename(enhanced_mp3)}")
+    cmd_mp3 = f'ffmpeg -y -i "{audio_file}" -af "highpass=f=80,volume=5dB" -b:a 192k -ar 44100 "{enhanced_mp3}"'
+    subprocess.run(cmd_mp3, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # 3. 智能静音语义切片
     log("[INFO] 正在分析音轨能量并执行智能语义停顿切片...")
@@ -392,10 +404,24 @@ async def process_video(video_path: str = None):
         t_start = split_indices[idx] / sr
         t_end = split_indices[idx+1] / sr
         chunk_data = data[split_indices[idx]:split_indices[idx+1]]
+        timecode = f"[{format_sec(t_start)} - {format_sec(t_end)}]"
+
+        # 智能静音极速过滤：若切片最大振幅 < 0.02，说明为纯净默读，直接跳过云端调用
+        chunk_max = np.max(np.abs(chunk_data)) if len(chunk_data) > 0 else 0
+        if chunk_max < 0.02:
+            results.append({
+                "index": idx + 1,
+                "timecode": timecode,
+                "asr_text": "",
+                "llm_text": "",
+                "is_speech": False
+            })
+            log(f"[INFO] {timecode} -> [沉浸默读 / 思考静音] (能量极低秒级跳过)")
+            continue
+
         chunk_file = os.path.join(temp_chunk_dir, f"chunk_{idx:03d}.wav")
         sf.write(chunk_file, chunk_data, sr, subtype='PCM_16')
 
-        timecode = f"[{format_sec(t_start)} - {format_sec(t_end)}]"
         res, err = await async_retranscribe(chunk_file, timeout=60)
         
         if res and (res.get("asr_text") or res.get("text")):
@@ -523,5 +549,6 @@ async def process_video(video_path: str = None):
         show_toast_popup(toast_title, toast_body, output_md, config.get("toast_duration_sec", 8.0))
 
 if __name__ == "__main__":
-    arg = sys.argv[1] if len(sys.argv) > 1 else None
-    asyncio.run(process_video(arg))
+    v_arg = sys.argv[1] if len(sys.argv) > 1 else None
+    b_arg = sys.argv[2] if len(sys.argv) > 2 else None
+    asyncio.run(process_video(v_arg, b_arg))

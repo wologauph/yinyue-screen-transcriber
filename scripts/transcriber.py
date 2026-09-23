@@ -356,16 +356,18 @@ async def process_video(video_path: str = None, book_override: str = None):
         return
     log(f"[SUCCESS] 音频母带分离完成，耗时: {time.time() - t_extract_start:.2f} 秒")
 
-    # 同步压制广播级饱满人声 MP3
-    enhanced_mp3 = os.path.join(closure_dir, f"{book_title}_5小时大结局录读_人声饱满增强版.mp3")
-    log(f"[INFO] 正在同步压制广播级饱满人声 MP3 -> {os.path.basename(enhanced_mp3)}")
-    cmd_mp3 = f'ffmpeg -y -i "{audio_file}" -af "highpass=f=80,volume=5dB" -b:a 192k -ar 44100 "{enhanced_mp3}"'
-    subprocess.run(cmd_mp3, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # 3. 智能静音语义切片
+    # 4. 分析音轨能量与智能语义切片
     log("[INFO] 正在分析音轨能量并执行智能语义停顿切片...")
     data, sr = sf.read(audio_file)
     total_sec = len(data) / sr
+
+    # 同步压制广播级饱满人声 MP3 (按实际时长动态命名，告别硬编码)
+    h = int(round(total_sec / 3600.0))
+    dur_tag = f"{max(1, h)}小时" if total_sec >= 1800 else f"{int(total_sec//60)}分钟"
+    enhanced_mp3 = os.path.join(closure_dir, f"{book_title}_{dur_tag}录读_人声饱满增强版.mp3")
+    log(f"[INFO] 正在同步压制广播级饱满人声 MP3 -> {os.path.basename(enhanced_mp3)}")
+    cmd_mp3 = f'ffmpeg -y -i "{audio_file}" -af "highpass=f=80,volume=5dB" -b:a 192k -ar 44100 "{enhanced_mp3}"'
+    subprocess.run(cmd_mp3, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     win_size = int(sr * 0.02)
     num_wins = len(data) // win_size
     rms = np.sqrt(np.mean(data[:num_wins*win_size].reshape(-1, win_size)**2, axis=1))
@@ -479,6 +481,7 @@ async def process_video(video_path: str = None, book_override: str = None):
 > **配套原料**：
 > - 🎬 视频原件：`{video_name}`
 > - 🎙️ 纯音频母带：`{os.path.basename(audio_file)}`
+> - 🎧 广播级增强音频：`{os.path.basename(enhanced_mp3)}`
 
 ---
 
